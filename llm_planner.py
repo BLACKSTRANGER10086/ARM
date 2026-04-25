@@ -43,8 +43,8 @@ def env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def build_validated_task(planning_description: str, original_description: str) -> dict[str, Any]:
-    task = build_task(planning_description)
+def build_validated_task(planning_description: str, original_description: str, start_joints: dict[str, float] | None = None, return_home: bool = True) -> dict[str, Any]:
+    task = build_task(planning_description, start_joints=start_joints, return_home=return_home)
     task["task_description"] = original_description
     validate_task(task)
     return task
@@ -142,12 +142,12 @@ def extract_json(text: str) -> dict[str, Any]:
     return json.loads(text[start : end + 1])
 
 
-def build_task_with_llm(description: str, model: str | None = None, debug: bool = False, local_first: bool | None = None) -> dict[str, Any]:
+def build_task_with_llm(description: str, model: str | None = None, debug: bool = False, local_first: bool | None = None, start_joints: dict[str, float] | None = None, start_gripper: str = "open", return_home: bool = True) -> dict[str, Any]:
     load_dotenv()
     use_local_first = env_flag(LOCAL_FIRST_ENV) if local_first is None else local_first
     if use_local_first and can_try_local_first(description):
         try:
-            return build_validated_task(description, description)
+            return build_validated_task(description, description, start_joints=start_joints, return_home=return_home)
         except PlanningError as exc:
             if debug:
                 print(f"本地直接规划失败，尝试 LLM 结构化语义解析: {exc}", file=sys.stderr)
@@ -156,18 +156,18 @@ def build_task_with_llm(description: str, model: str | None = None, debug: bool 
     try:
         parsed = extract_json(call_llm(description, selected_model))
         if "commands" in parsed:
-            return build_task_from_command_plan(parsed, description)
+            return build_task_from_command_plan(parsed, description, start_joints=start_joints, start_gripper=start_gripper, return_home=return_home)
         normalized = parsed.get("normalized_instruction") or parsed.get("description") or description
     except Exception as exc:
         if debug:
             print(f"LLM 结构化语义解析失败，回退本地规则: {exc}", file=sys.stderr)
         normalized = description
     try:
-        return build_validated_task(normalized, description)
+        return build_validated_task(normalized, description, start_joints=start_joints, return_home=return_home)
     except PlanningError as normalized_exc:
         if normalized != description:
             try:
-                return build_validated_task(description, description)
+                return build_validated_task(description, description, start_joints=start_joints, return_home=return_home)
             except PlanningError as original_exc:
                 raise LLMPlanningError(f"3-DOF 规划失败: {normalized_exc}; 原始输入回退也失败: {original_exc}") from original_exc
         raise LLMPlanningError(f"3-DOF 规划失败: {normalized_exc}") from normalized_exc
@@ -184,9 +184,10 @@ def main() -> int:
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--local-first", action="store_true", help="跳过 LLM，优先尝试本地中文规则解析")
+    parser.add_argument("--no-return-home", action="store_true", help="执行完毕后不回 HOME")
     args = parser.parse_args()
     try:
-        task = build_task_with_llm(args.description, args.model, args.debug, args.local_first)
+        task = build_task_with_llm(args.description, args.model, args.debug, args.local_first, return_home=not args.no_return_home)
     except LLMPlanningError as exc:
         print(f"LLM 规划失败: {exc}", file=sys.stderr)
         return 1

@@ -11,6 +11,7 @@ import random
 import sys
 from pathlib import Path
 
+from arm_planner import HOME_JOINTS, extract_end_state
 from llm_planner import LLMPlanningError, build_task_with_llm
 from random_task_generator import generate_task
 from task_demo import simulate_task
@@ -33,6 +34,7 @@ def main() -> int:
     parser.add_argument("--model", default=None, help="传给 llm_planner 的模型名")
     parser.add_argument("--debug", action="store_true", help="输出 LLM 解析失败和回退信息")
     parser.add_argument("--local-first", action="store_true", help="跳过 LLM，优先尝试本地中文规则解析")
+    parser.add_argument("--no-return-home", action="store_true", help="执行完毕后不回 HOME，下次从当前位置继续")
     parser.add_argument("--max-retries", type=int, default=3, help="LLM 规划失败时的最大重试次数")
     parser.add_argument(
         "--save-json-dir",
@@ -48,16 +50,25 @@ def main() -> int:
     if save_dir:
         save_dir.mkdir(parents=True, exist_ok=True)
 
+    return_home = not args.no_return_home
+    current_joints: dict[str, float] = dict(HOME_JOINTS)
+    current_gripper: str = "open"
+
     for index in range(max(args.count, 0)):
         task_text = generate_task(args.type)
         print(f"=== Run {index + 1} ===")
         print(f"Natural Language Task: {task_text}")
 
+        start_joints_snapshot = dict(current_joints)
+
         task_json = None
         last_error = None
         for attempt in range(1, max(args.max_retries, 1) + 1):
             try:
-                task_json = build_task_with_llm(task_text, args.model, args.debug, args.local_first)
+                task_json = build_task_with_llm(
+                    task_text, args.model, args.debug, args.local_first,
+                    start_joints=current_joints, start_gripper=current_gripper, return_home=return_home,
+                )
                 break
             except LLMPlanningError as exc:
                 last_error = exc
@@ -72,11 +83,15 @@ def main() -> int:
             output_path.write_text(json.dumps(task_json, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"Saved JSON: {output_path}")
 
+        end_joints, end_gripper = extract_end_state(task_json, start_joints=current_joints)
+        current_joints = end_joints
+        current_gripper = str(end_gripper["state"])
+
         print("Planned JSON:")
         print(json.dumps(task_json, ensure_ascii=False, indent=2))
         print()
         print("Demo:")
-        print(simulate_task(task_json))
+        print(simulate_task(task_json, start_joints=start_joints_snapshot))
         if index + 1 < args.count:
             print()
 

@@ -12,7 +12,7 @@
   -> 终端/Web 3D 演示
 ```
 
-LLM 负责理解自然语言并输出高层语义命令，例如 `pick/place/home`；它不允许直接输出关节角、轨迹点或 `move_joints`。机械臂轨迹必须由本地确定性规划器生成并校验。
+LLM 负责理解自然语言并输出高层语义命令，例如 `pick/place/home`；它不能输出关节角、轨迹点或 `move_joints`。机械臂轨迹必须由本地确定性规划器生成并校验。
 
 ## 机械臂模型
 
@@ -85,16 +85,20 @@ LLM 负责理解自然语言并输出高层语义命令，例如 `pick/place/hom
   - `build_task(description)` 保留旧的本地中文规则解析，支持抓取、放置、复位、简单抓取后放置。
   - `build_task_from_command_plan(plan, original_description)` 将 LLM 语义 `commands` 编译为可执行任务 JSON。
   - `validate_task(task)` 校验动作字段、关节限位、插值过程、TCP 高度和基座对准阶段约束。
+  - `extract_end_state(task)` 从已完成任务中提取最终关节角和夹爪状态，用于链式调用。
+  - 以上规划和校验函数均支持 `start_joints` 参数指定起始关节角，`return_home` 参数控制是否回 HOME。
 - `llm_planner.py` 默认优先调用 LLM 输出结构化语义命令 JSON；如果 LLM 不可用或语义命令不可规划，则回退本地规则。
-- `--local-first` 或 Web 里的“本地优先（跳过 LLM）”只用于调试和无 API Key 场景，正常自然语言流程不建议勾选。
-- 轨迹规划会在旋转底座前进入安全转向姿态；每个完整任务默认最后回 HOME。
+- `--local-first` 或 Web 里的”本地优先（跳过 LLM）”会优先尝试本地中文规则解析，失败或不匹配时仍会调用 LLM。只用于调试和无 API Key 场景，正常自然语言流程不建议勾选。
+- `--no-return-home`（CLI）或 `return_home=false`（API）可让任务结束后不回 HOME，下次从当前位置继续。Web 端默认不回 HOME。
+- 轨迹规划会在旋转底座前进入安全转向姿态；不回 HOME 时停在目标方向的安全转向姿态。
 - 动作时长由 `MOVE_DURATION_MS = {"slow": 1200, "medium": 900, "fast": 650}` 和 `GRIPPER_DURATION_MS = 420` 控制。
 
 ## Web 工作流
 
-- `web_ui.py` 提供 HTTP 静态文件和 API：
+- `web_ui.py` 提供 HTTP 静态文件和 API，并维护线程安全的机械臂状态（当前关节角和夹爪）：
   - `POST /api/random`：生成随机自然语言任务，类型支持 `mixed/grasp/place/pick_place/home`。
-  - `POST /api/workflow`：接收 `task_text/model/retries/local_first`，返回任务 JSON 和 Web 动画帧。
+  - `POST /api/workflow`：接收 `task_text/model/retries/local_first/return_home`，从当前状态起始规划，返回任务 JSON 和 Web 动画帧，完成后更新状态。`return_home` 默认 `false`。
+  - `POST /api/reset`：将服务端关节和夹爪状态重置为 HOME。
 - `/api/workflow` 要求 `task_text` 非空；空输入不会自动生成随机任务。
 - Web 帧字段：
   - `joints`: `j1/j2/j3`
@@ -124,10 +128,11 @@ LLM 负责理解自然语言并输出高层语义命令，例如 `pick/place/hom
 ```powershell
 python .\web_ui.py
 python .\arm_planner.py "抓取左侧30厘米处地面上的盒子"
-python .\arm_planner.py "把右侧20厘米处地面上的杯子抓起来然后放到前面5cm处"
+python .\arm_planner.py "把右侧20厘米处地面上的杯子抓起来然后放到前面5cm处" --no-return-home
 python .\llm_planner.py "把右侧20厘米处地面上的杯子抓起来然后放到前面5cm处"
 python .\llm_planner.py "把右侧20厘米处地面上的杯子抓起来然后放到前面5cm处" | python .\task_demo.py
 python .\workflow_demo.py --type pick_place --local-first -n 1
+python .\workflow_demo.py --type pick_place --no-return-home -n 3
 ```
 
 验证：
@@ -139,8 +144,9 @@ node --check .\web\app.js
 
 ## 维护注意事项
 
-- 不要让 LLM 直接输出 `move_joints`、关节角或轨迹点；LLM 只能输出高层语义 `commands`。
+- LLM 只能输出高层语义 `commands`，不能输出关节角、轨迹点或 `move_joints`。
 - 修改语义命令 schema 时，需要同步更新 `llm_planner.py`、`arm_planner.py`、`prompts/system_prompt.md`、`README.md` 和相关示例。
 - 修改关节数量、限位、连杆长度或帧字段时，必须同步更新 `arm_planner.py`、`web_ui.py`、`web/app.js`、`task_demo.py`、`schemas/arm_task.schema.json`、`README.md`、`prompts/system_prompt.md`、`examples/grasp_box.json`。
+- `web_ui.py` 维护线程安全的机械臂状态（`_arm_state`），修改状态字段时需同步更新 `extract_end_state()`、`build_frames()` 和 `/api/reset` 的初始值。
 - Web 按钮无响应或 3D 不显示时，优先运行 `node --check .\web\app.js`。
 - 浏览器显示旧效果时，先用 `Ctrl + F5` 强制刷新；`web_ui.py` 对静态资源设置了 `Cache-Control: no-store`。

@@ -34,9 +34,9 @@ def joint_distance(a: dict[str, float], b: dict[str, float]) -> float:
     return math.sqrt(yaw_delta**2 + (b["j2"] - a["j2"]) ** 2 + (b["j3"] - a["j3"]) ** 2)
 
 
-def simulate_task(task: dict[str, Any]) -> str:
-    validate_task(task)
-    joints = dict(HOME_JOINTS)
+def simulate_task(task: dict[str, Any], start_joints: dict[str, float] | None = None) -> str:
+    validate_task(task, start_joints=start_joints)
+    joints = dict(start_joints) if start_joints else dict(HOME_JOINTS)
     gripper: dict[str, float | str] = {"state": "open", "width": 100.0, "force": 0.0}
     elapsed_ms = 0
     lines = [

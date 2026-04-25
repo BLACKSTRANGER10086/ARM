@@ -29,6 +29,7 @@ let run = null;
 let motionFrames = [];
 let frameIndex = 0;
 let timer = null;
+let currentFrame = frameFromApi(HOME);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
@@ -162,7 +163,8 @@ function buildMotionFrames(apiFrames) {
 }
 
 function renderFrame() {
-  const frame = motionFrames[frameIndex] || frameFromApi(HOME);
+  const frame = motionFrames[frameIndex] || currentFrame;
+  currentFrame = frame;
   clearGroup(armGroup);
   addBase();
   addLink(frame.points.base, frame.points.shoulder);
@@ -259,7 +261,7 @@ function renderSteps(activeStep) {
 function resetResult(text = "[ 空 ] 尚未生成规划结果") {
   stop();
   run = null;
-  motionFrames = [frameFromApi(HOME)];
+  motionFrames = [currentFrame];
   frameIndex = 0;
   els.jsonBox.textContent = text;
   els.steps.innerHTML = "";

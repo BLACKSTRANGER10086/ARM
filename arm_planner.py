@@ -343,10 +343,11 @@ def make_hover_point(target: Point3D) -> Point3D:
     raise PlanningError(f"无法为目标生成可达悬停点: x={target.x:.1f}, y={target.y:.1f}, z={target.z:.1f}")
 
 
-def plan_grasp(description: str, target: Point3D) -> list[dict[str, Any]]:
+def plan_grasp(description: str, target: Point3D, start_joints: dict[str, float] | None = None, return_home: bool = True) -> list[dict[str, Any]]:
+    start = start_joints or dict(HOME_JOINTS)
     hover = make_hover_point(target)
     target_yaw = inverse_kinematics(hover.x, hover.y, hover.z)["j1"]
-    home_safe_joints = safe_yaw_joints(HOME_JOINTS["j1"])
+    start_safe_joints = safe_yaw_joints(start["j1"])
     target_safe_joints = safe_yaw_joints(target_yaw)
     hover_joints = inverse_kinematics(hover.x, hover.y, hover.z)
     target_joints = inverse_kinematics(target.x, target.y, target.z)
@@ -354,8 +355,8 @@ def plan_grasp(description: str, target: Point3D) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     step = 1
     steps.append(make_gripper(step, "open", 80, 0, "预开夹爪")); step += 1
-    steps.append(make_move(step, "肩肘展开到安全转向姿态", home_safe_joints, "medium")); step += 1
-    if abs(shortest_yaw_delta(HOME_JOINTS["j1"], target_yaw)) >= 0.5:
+    steps.append(make_move(step, "肩肘展开到安全转向姿态", start_safe_joints, "medium")); step += 1
+    if abs(shortest_yaw_delta(start["j1"], target_yaw)) >= 0.5:
         steps.append(make_move(step, "保持肩肘姿态旋转基座对准目标方位", target_safe_joints, "medium")); step += 1
     steps.append(make_move(step, "肩肘协同伸出到目标上方", hover_joints, "medium")); step += 1
     steps.append(make_move(step, "保持方位下降到抓取点", target_joints, "slow")); step += 1
@@ -363,43 +364,49 @@ def plan_grasp(description: str, target: Point3D) -> list[dict[str, Any]]:
     steps.append(make_wait(step, 500, "等待夹持稳定")); step += 1
     steps.append(make_move(step, "肩肘协同抬起目标物", hover_joints, "slow")); step += 1
     steps.append(make_move(step, "回到当前方位安全转向姿态", target_safe_joints, "medium")); step += 1
-    if abs(shortest_yaw_delta(target_safe_joints["j1"], HOME_JOINTS["j1"])) >= 0.5:
-        steps.append(make_move(step, "保持肩肘姿态旋回 HOME 方位", home_safe_joints, "medium")); step += 1
-    steps.append(make_move(step, "肩肘垂直收拢回 HOME", HOME_JOINTS, "medium")); step += 1
+    if return_home:
+        home_safe_joints = safe_yaw_joints(HOME_JOINTS["j1"])
+        if abs(shortest_yaw_delta(target_safe_joints["j1"], HOME_JOINTS["j1"])) >= 0.5:
+            steps.append(make_move(step, "保持肩肘姿态旋回 HOME 方位", home_safe_joints, "medium")); step += 1
+        steps.append(make_move(step, "肩肘垂直收拢回 HOME", HOME_JOINTS, "medium")); step += 1
     return renumber_steps(steps)
 
 
-def plan_place(description: str, target: Point3D) -> list[dict[str, Any]]:
+def plan_place(description: str, target: Point3D, start_joints: dict[str, float] | None = None, return_home: bool = True) -> list[dict[str, Any]]:
+    start = start_joints or dict(HOME_JOINTS)
     hover = make_hover_point(target)
     target_yaw = inverse_kinematics(hover.x, hover.y, hover.z)["j1"]
-    home_safe_joints = safe_yaw_joints(HOME_JOINTS["j1"])
+    start_safe_joints = safe_yaw_joints(start["j1"])
     target_safe_joints = safe_yaw_joints(target_yaw)
     hover_joints = inverse_kinematics(hover.x, hover.y, hover.z)
     target_joints = inverse_kinematics(target.x, target.y, target.z)
 
     steps: list[dict[str, Any]] = []
     step = 1
-    steps.append(make_move(step, "肩肘展开到安全转向姿态", home_safe_joints, "medium")); step += 1
-    if abs(shortest_yaw_delta(HOME_JOINTS["j1"], target_yaw)) >= 0.5:
+    steps.append(make_move(step, "肩肘展开到安全转向姿态", start_safe_joints, "medium")); step += 1
+    if abs(shortest_yaw_delta(start["j1"], target_yaw)) >= 0.5:
         steps.append(make_move(step, "保持肩肘姿态旋转基座对准放置方位", target_safe_joints, "medium")); step += 1
     steps.append(make_move(step, "肩肘协同伸出到放置点上方", hover_joints, "medium")); step += 1
     steps.append(make_move(step, "保持方位下降到放置点", target_joints, "slow")); step += 1
     steps.append(make_gripper(step, "open", 80, 0, "打开夹爪释放")); step += 1
     steps.append(make_wait(step, 500, "等待物体稳定")); step += 1
     steps.append(make_move(step, "回到当前方位安全转向姿态", target_safe_joints, "medium")); step += 1
-    if abs(shortest_yaw_delta(target_safe_joints["j1"], HOME_JOINTS["j1"])) >= 0.5:
-        steps.append(make_move(step, "保持肩肘姿态旋回 HOME 方位", home_safe_joints, "medium")); step += 1
-    steps.append(make_move(step, "肩肘垂直收拢回 HOME", HOME_JOINTS, "medium")); step += 1
+    if return_home:
+        home_safe_joints = safe_yaw_joints(HOME_JOINTS["j1"])
+        if abs(shortest_yaw_delta(target_safe_joints["j1"], HOME_JOINTS["j1"])) >= 0.5:
+            steps.append(make_move(step, "保持肩肘姿态旋回 HOME 方位", home_safe_joints, "medium")); step += 1
+        steps.append(make_move(step, "肩肘垂直收拢回 HOME", HOME_JOINTS, "medium")); step += 1
     return renumber_steps(steps)
 
 
-def plan_pick_and_place(description: str, source: Point3D, destination: Point3D) -> list[dict[str, Any]]:
+def plan_pick_and_place(description: str, source: Point3D, destination: Point3D, start_joints: dict[str, float] | None = None, return_home: bool = True) -> list[dict[str, Any]]:
+    start = start_joints or dict(HOME_JOINTS)
     source_hover = make_hover_point(source)
     destination_hover = make_hover_point(destination)
 
     source_yaw = inverse_kinematics(source_hover.x, source_hover.y, source_hover.z)["j1"]
     destination_yaw = inverse_kinematics(destination_hover.x, destination_hover.y, destination_hover.z)["j1"]
-    home_safe_joints = safe_yaw_joints(HOME_JOINTS["j1"])
+    start_safe_joints = safe_yaw_joints(start["j1"])
     source_safe_joints = safe_yaw_joints(source_yaw)
     destination_safe_joints = safe_yaw_joints(destination_yaw)
     source_hover_joints = inverse_kinematics(source_hover.x, source_hover.y, source_hover.z)
@@ -410,8 +417,8 @@ def plan_pick_and_place(description: str, source: Point3D, destination: Point3D)
     steps: list[dict[str, Any]] = []
     step = 1
     steps.append(make_gripper(step, "open", 80, 0, "预开夹爪")); step += 1
-    steps.append(make_move(step, "肩肘展开到安全转向姿态", home_safe_joints, "medium")); step += 1
-    if abs(shortest_yaw_delta(HOME_JOINTS["j1"], source_yaw)) >= 0.5:
+    steps.append(make_move(step, "肩肘展开到安全转向姿态", start_safe_joints, "medium")); step += 1
+    if abs(shortest_yaw_delta(start["j1"], source_yaw)) >= 0.5:
         steps.append(make_move(step, "保持肩肘姿态旋转基座对准抓取方位", source_safe_joints, "medium")); step += 1
     steps.append(make_move(step, "肩肘协同伸出到抓取点上方", source_hover_joints, "medium")); step += 1
     steps.append(make_move(step, "保持方位下降到抓取点", source_joints, "slow")); step += 1
@@ -427,9 +434,11 @@ def plan_pick_and_place(description: str, source: Point3D, destination: Point3D)
     steps.append(make_wait(step, 500, "等待物体稳定")); step += 1
     steps.append(make_move(step, "肩肘协同抬离放置点", destination_hover_joints, "slow")); step += 1
     steps.append(make_move(step, "回到当前方位安全转向姿态", destination_safe_joints, "medium")); step += 1
-    if abs(shortest_yaw_delta(destination_yaw, HOME_JOINTS["j1"])) >= 0.5:
-        steps.append(make_move(step, "保持肩肘姿态旋回 HOME 方位", home_safe_joints, "medium")); step += 1
-    steps.append(make_move(step, "肩肘垂直收拢回 HOME", HOME_JOINTS, "medium")); step += 1
+    if return_home:
+        home_safe_joints = safe_yaw_joints(HOME_JOINTS["j1"])
+        if abs(shortest_yaw_delta(destination_yaw, HOME_JOINTS["j1"])) >= 0.5:
+            steps.append(make_move(step, "保持肩肘姿态旋回 HOME 方位", home_safe_joints, "medium")); step += 1
+        steps.append(make_move(step, "肩肘垂直收拢回 HOME", HOME_JOINTS, "medium")); step += 1
     return renumber_steps(steps)
 
 
@@ -494,14 +503,14 @@ def command_target(command: dict[str, Any], default_z: float) -> Point3D:
     return target_from_spec(target, default_z=default_z)
 
 
-def plan_command_sequence(commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def plan_command_sequence(commands: list[dict[str, Any]], start_joints: dict[str, float] | None = None, start_gripper: str = "open", return_home: bool = True) -> list[dict[str, Any]]:
     if not commands:
         raise PlanningError("语义命令序列不能为空")
 
     steps: list[dict[str, Any]] = []
     step = 1
-    current_joints = dict(HOME_JOINTS)
-    gripper_state = "open"
+    current_joints = dict(start_joints) if start_joints else dict(HOME_JOINTS)
+    gripper_state = start_gripper
 
     for command in commands:
         command_type = normalize_command_type(command.get("type"))
@@ -535,16 +544,17 @@ def plan_command_sequence(commands: list[dict[str, Any]]) -> list[dict[str, Any]
             steps.append(make_move(step, "回到当前方位安全转向姿态", target_safe_joints, "medium")); step += 1
             current_joints = target_safe_joints
 
-    if not steps or steps[-1].get("action") != "move_joints" or steps[-1]["params"]["joints"] != HOME_JOINTS:
-        append_return_home(steps, step, current_joints)
+    if return_home:
+        if not steps or steps[-1].get("action") != "move_joints" or steps[-1]["params"]["joints"] != HOME_JOINTS:
+            append_return_home(steps, step, current_joints)
     return renumber_steps(steps)
 
 
-def build_task_from_command_plan(plan: dict[str, Any], original_description: str | None = None) -> dict[str, Any]:
+def build_task_from_command_plan(plan: dict[str, Any], original_description: str | None = None, start_joints: dict[str, float] | None = None, start_gripper: str = "open", return_home: bool = True) -> dict[str, Any]:
     commands = plan.get("commands")
     if not isinstance(commands, list):
         raise PlanningError("语义 JSON 缺少 commands 数组")
-    steps = plan_command_sequence(commands)
+    steps = plan_command_sequence(commands, start_joints=start_joints, start_gripper=start_gripper, return_home=return_home)
     task = {
         "task_id": str(uuid.uuid4()),
         "task_description": original_description or str(plan.get("description") or "结构化语义命令"),
@@ -560,12 +570,17 @@ def build_task_from_command_plan(plan: dict[str, Any], original_description: str
         },
         "steps": steps,
     }
-    validate_task(task)
+    validate_task(task, start_joints=start_joints)
     return task
 
 
-def plan_home() -> list[dict[str, Any]]:
-    return [make_move(1, "回到三关节 HOME 姿态", HOME_JOINTS, "medium")]
+def plan_home(start_joints: dict[str, float] | None = None) -> list[dict[str, Any]]:
+    start = start_joints or dict(HOME_JOINTS)
+    steps: list[dict[str, Any]] = []
+    append_return_home(steps, 1, start)
+    if not steps:
+        steps.append(make_move(1, "回到三关节 HOME 姿态", HOME_JOINTS, "medium"))
+    return renumber_steps(steps)
 
 
 def renumber_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -574,22 +589,22 @@ def renumber_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return steps
 
 
-def build_task(description: str) -> dict[str, Any]:
+def build_task(description: str, start_joints: dict[str, float] | None = None, return_home: bool = True) -> dict[str, Any]:
     if not description.strip():
         raise PlanningError("任务描述不能为空")
     target: Point3D | None = None
     compound_targets: tuple[Point3D, Point3D] | None = None
     if any(word in description for word in ["回零", "复位", "回到初始", "回家", "home"]):
-        steps = plan_home()
+        steps = plan_home(start_joints=start_joints)
     elif compound_targets := parse_pick_and_place_targets(description):
         source, destination = compound_targets
-        steps = plan_pick_and_place(description, source, destination)
+        steps = plan_pick_and_place(description, source, destination, start_joints=start_joints, return_home=return_home)
     elif any(word in description for word in ["放到", "放置", "放下"]):
         target = parse_target(description, default_z=GRASP_HEIGHT_MM)
-        steps = plan_place(description, target)
+        steps = plan_place(description, target, start_joints=start_joints, return_home=return_home)
     elif any(word in description for word in ["抓", "拿", "夹取", "拾取"]):
         target = parse_target(description, default_z=GRASP_HEIGHT_MM)
-        steps = plan_grasp(description, target)
+        steps = plan_grasp(description, target, start_joints=start_joints, return_home=return_home)
     else:
         raise PlanningError("暂只支持抓取、放置和复位任务")
     task = {
@@ -599,17 +614,17 @@ def build_task(description: str) -> dict[str, Any]:
         "metadata": build_metadata(description, target, compound_targets),
         "steps": steps,
     }
-    validate_task(task)
+    validate_task(task, start_joints=start_joints)
     return task
 
 
-def validate_task(task: dict[str, Any]) -> None:
+def validate_task(task: dict[str, Any], start_joints: dict[str, float] | None = None) -> None:
     for field in ["task_id", "task_description", "created_at", "steps"]:
         if field not in task:
             raise PlanningError(f"任务缺少字段: {field}")
     if not task["steps"]:
         raise PlanningError("任务至少需要一个步骤")
-    current_joints = dict(HOME_JOINTS)
+    current_joints = dict(start_joints) if start_joints else dict(HOME_JOINTS)
     target_yaw: float | None = None
     for expected, step in enumerate(task["steps"], start=1):
         if step.get("step") != expected:
@@ -655,14 +670,27 @@ def validate_step(step: dict[str, Any]) -> None:
         raise PlanningError(f"不支持的 action: {action}")
 
 
+def extract_end_state(task: dict[str, Any], start_joints: dict[str, float] | None = None, start_gripper: dict[str, float | str] | None = None) -> tuple[dict[str, float], dict[str, float | str]]:
+    """从已完成任务中提取最终关节角和夹爪状态。"""
+    joints = dict(start_joints) if start_joints else dict(HOME_JOINTS)
+    gripper: dict[str, float | str] = dict(start_gripper) if start_gripper else {"state": "open", "width": 100.0, "force": 0.0}
+    for step in task.get("steps", []):
+        if step["action"] == "move_joints":
+            joints = {k: float(step["params"]["joints"][k]) for k in ["j1", "j2", "j3"]}
+        elif step["action"] == "gripper":
+            gripper = {"state": step["params"]["state"], "width": float(step["params"]["width"]), "force": float(step["params"]["force"])}
+    return joints, gripper
+
+
 def main() -> int:
     configure_stdio()
     parser = argparse.ArgumentParser(description="用本地规则生成 3-DOF 机械臂可执行任务 JSON")
     parser.add_argument("description")
     parser.add_argument("--compact", action="store_true")
+    parser.add_argument("--no-return-home", action="store_true", help="执行完毕后不回 HOME")
     args = parser.parse_args()
     try:
-        task = build_task(args.description)
+        task = build_task(args.description, return_home=not args.no_return_home)
     except PlanningError as exc:
         print(f"规划失败: {exc}", file=sys.stderr)
         return 1

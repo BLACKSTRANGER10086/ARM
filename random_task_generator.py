@@ -9,6 +9,8 @@ import argparse
 import random
 import sys
 
+_RNG = random.Random
+
 
 OBJECTS = ["盒子", "杯子", "瓶子", "零件", "小物体", "方块", "工具"]
 DIRECTIONS = ["前面", "后面", "左侧", "右侧"]
@@ -16,48 +18,50 @@ SURFACES = ["地面上", "桌面上", "台面上"]
 DISTANCES_CM = [15, 20, 25, 30, 35, 40, 45, 50]
 
 
-def random_location() -> str:
-    return f"{random.choice(DIRECTIONS)}{random.choice(DISTANCES_CM)}厘米处{random.choice(SURFACES)}"
+def random_location(rng: _RNG) -> str:
+    return f"{rng.choice(DIRECTIONS)}{rng.choice(DISTANCES_CM)}厘米处{rng.choice(SURFACES)}"
 
 
-def random_grasp_task() -> str:
-    return random.choice([
+def random_grasp_task(rng: _RNG) -> str:
+    return rng.choice([
         "抓取{location}的{obj}",
         "把{location}的{obj}抓起来",
         "从{location}拾取{obj}",
-    ]).format(location=random_location(), obj=random.choice(OBJECTS))
+    ]).format(location=random_location(rng), obj=rng.choice(OBJECTS))
 
 
-def random_place_task() -> str:
-    return random.choice([
+def random_place_task(rng: _RNG) -> str:
+    return rng.choice([
         "把物体放到{location}",
         "将手里的物体放置到{location}",
         "移动到{location}并放下物体",
-    ]).format(location=random_location())
+    ]).format(location=random_location(rng))
 
 
-def random_pick_place_task() -> str:
-    return random.choice([
+def random_pick_place_task(rng: _RNG) -> str:
+    return rng.choice([
         "把{source}的{obj}抓起来然后放到{destination}",
         "从{source}拾取{obj}，再放到{destination}",
         "先抓取{source}的{obj}，然后放置到{destination}",
-    ]).format(source=random_location(), destination=random_location(), obj=random.choice(OBJECTS))
+    ]).format(source=random_location(rng), destination=random_location(rng), obj=rng.choice(OBJECTS))
 
 
-def random_home_task() -> str:
-    return random.choice(["回到初始位置", "机械臂复位", "回到 home 位置"])
+def random_home_task(rng: _RNG) -> str:
+    return rng.choice(["回到初始位置", "机械臂复位", "回到 home 位置"])
 
 
-def generate_task(task_type: str = "mixed") -> str:
+def generate_task(task_type: str = "mixed", rng: _RNG | None = None) -> str:
+    if rng is None:
+        rng = random._inst
     if task_type == "grasp":
-        return random_grasp_task()
+        return random_grasp_task(rng)
     if task_type == "place":
-        return random_place_task()
+        return random_place_task(rng)
     if task_type in {"pick_place", "compound"}:
-        return random_pick_place_task()
+        return random_pick_place_task(rng)
     if task_type == "home":
-        return random_home_task()
-    return random.choices([random_grasp_task, random_place_task, random_pick_place_task, random_home_task], weights=[0.48, 0.24, 0.2, 0.08], k=1)[0]()
+        return random_home_task(rng)
+    return rng.choices([random_grasp_task, random_place_task, random_pick_place_task, random_home_task], weights=[0.48, 0.24, 0.2, 0.08], k=1)[0](rng)
 
 
 def main() -> int:
