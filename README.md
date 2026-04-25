@@ -104,6 +104,154 @@ OPENAI_MODEL=deepseek-v4-flash
 
 如果 LLM 调用失败，`llm_planner.py` 会回退到本地规则解析。Web 和命令行都提供 `local_first` / `--local-first` 调试入口，用于跳过 LLM 直接测试本地规则。
 
+## 工作流说明
+
+项目有 Web 页面、单脚本命令行和端到端命令行三种常用入口。它们最终都会进入 `arm_planner.py`，由本地规划器生成和校验轨迹。
+
+### Web 页面工作流
+
+启动：
+
+```powershell
+python .\web_ui.py
+```
+
+页面路径：
+
+```text
+浏览器输入任务
+  -> web/app.js 读取输入框、模型名、重试次数、本地优先开关
+  -> POST /api/workflow
+  -> web_ui.py 调用 llm_planner.build_task_with_llm()
+  -> llm_planner.py 调用 LLM 输出 commands 语义 JSON
+  -> arm_planner.py 编译 commands 为 steps 轨迹 JSON
+  -> web_ui.py build_frames() 生成动画关键帧
+  -> web/app.js 插值播放 Three.js 3D 动画
+```
+
+页面按钮含义：
+
+- “随机生成”：只调用 `POST /api/random`，把随机自然语言任务填进输入框，不执行规划。
+- “运行流程”：调用 `POST /api/workflow`，生成任务 JSON 和动画帧。
+- “本地优先（跳过 LLM）”：勾选后 `/api/workflow` 会跳过 LLM，直接用本地中文规则解析输入；正常自然语言测试建议不勾选。
+- “播放/暂停/重置”：只控制前端已经拿到的动画帧，不重新规划。
+
+Web 输出：
+
+- 左下时间线显示本地生成的 `steps`。
+- 右下 JSON 面板显示本地可执行任务 JSON。
+- 3D 视图使用 `frames[].points.base/shoulder/elbow/tool` 渲染机械臂连杆和轨迹。
+
+### 本地规划命令行
+
+直接调用：
+
+```powershell
+python .\arm_planner.py "抓取前面30厘米处地面上的盒子"
+```
+
+路径：
+
+```text
+规范中文任务
+  -> arm_planner.build_task()
+  -> 本地规则解析目标
+  -> 正/逆运动学和路径规划
+  -> validate_task()
+  -> 输出可执行任务 JSON
+```
+
+这个入口不调用 LLM，适合调试运动学、路径生成和安全校验。它支持规范中文抓取、放置、复位和简单“抓取后放置”，但不适合依赖复杂自然语言理解。
+
+### LLM 规划命令行
+
+直接调用：
+
+```powershell
+python .\llm_planner.py "把右侧20厘米处地面上的杯子抓起来然后放到前面5cm处"
+```
+
+路径：
+
+```text
+自然语言任务
+  -> llm_planner.call_llm()
+  -> LLM 输出 description + commands
+  -> arm_planner.build_task_from_command_plan()
+  -> validate_task()
+  -> 输出可执行任务 JSON
+```
+
+如果加 `--local-first`：
+
+```powershell
+python .\llm_planner.py "把右侧20厘米处地面上的杯子抓起来然后放到前面5cm处" --local-first
+```
+
+路径会变成：
+
+```text
+自然语言任务
+  -> 先尝试 arm_planner.build_task()
+  -> 失败后再尝试 LLM
+```
+
+### 终端演示管道
+
+```powershell
+python .\llm_planner.py "把右侧20厘米处地面上的杯子抓起来然后放到前面5cm处" | python .\task_demo.py
+```
+
+路径：
+
+```text
+llm_planner.py 输出可执行任务 JSON
+  -> task_demo.py 从 stdin 读取 JSON
+  -> validate_task()
+  -> 打印任务信息、目标分析、每一步关节变化、TCP、夹爪状态和总耗时
+```
+
+`task_demo.py` 不重新规划，只负责验证并展示已有任务 JSON。
+
+### 随机端到端 workflow
+
+```powershell
+python .\workflow_demo.py --type pick_place -n 1
+```
+
+路径：
+
+```text
+random_task_generator.py 生成自然语言任务
+  -> llm_planner.py 生成语义 commands 并本地规划
+  -> task_demo.py 输出终端演示
+```
+
+如果使用：
+
+```powershell
+python .\workflow_demo.py --type pick_place --local-first -n 1
+```
+
+则随机任务会跳过 LLM，直接测试本地规则规划。
+
+### API 工作流
+
+Web 后端提供两个 API：
+
+```text
+POST /api/random
+  -> random_task_generator.generate_task()
+  -> 返回 {"task_text": "..."}
+
+POST /api/workflow
+  -> llm_planner.build_task_with_llm()
+  -> web_ui.build_frames()
+  -> 返回 {"task_text": "...", "task": {...}, "frames": [...]}
+```
+
+`/api/workflow` 要求 `task_text` 非空。空输入不会自动生成随机任务，避免误播放上一条随机任务。
+
 ## 运行
 
 Web 控制台：
