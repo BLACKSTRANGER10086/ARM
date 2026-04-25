@@ -1,9 +1,10 @@
-﻿"""本地 3-DOF 机械臂规划模块。
+﻿"""本地 3-DOF 机械臂规划与安全校验模块。
 
-负责把规范中文任务转换为安全的 JSON 关节指令，并提供正/逆运动学和任务
-校验能力。主要对外接口是 `build_task()`、`validate_task()`、
+负责把 LLM 输出的高层语义 `commands` JSON 或旧式规范中文任务编译为可执行
+`move_joints/gripper/wait` 任务 JSON。主要对外接口是
+`build_task_from_command_plan()`、`build_task()`、`validate_task()`、
 `forward_kinematics()` 和 `forward_kinematics_points()`。本模块被
-`llm_planner.py`、`task_demo.py`、`web_ui.py` 调用，是项目中唯一的轨迹
+`llm_planner.py`、`task_demo.py`、`web_ui.py` 调用，是项目中唯一的关节轨迹
 生成与安全检查层。
 """
 
@@ -193,6 +194,38 @@ def parse_target(text: str, default_z: float | None = None) -> Point3D:
         z = default_z
     else:
         z = GRASP_HEIGHT_MM if "上" in text else PRE_GRASP_HEIGHT_MM
+    return Point3D(float(x), float(y), float(z))
+
+
+def target_from_spec(spec: dict[str, Any], default_z: float = GRASP_HEIGHT_MM) -> Point3D:
+    if not isinstance(spec, dict):
+        raise PlanningError("target 必须是对象")
+    distance = spec.get("distance_mm")
+    if distance is None and spec.get("distance_cm") is not None:
+        distance = float(spec["distance_cm"]) * 10
+    if distance is None and spec.get("distance_m") is not None:
+        distance = float(spec["distance_m"]) * 1000
+    distance = int(round(float(distance if distance is not None else 300)))
+
+    direction = str(spec.get("direction", "front")).lower()
+    if any(word in direction for word in ["左", "left"]):
+        x, y = 0, distance
+    elif any(word in direction for word in ["右", "right"]):
+        x, y = 0, -distance
+    elif any(word in direction for word in ["后", "back", "rear", "behind"]):
+        x, y = -distance, 0
+    else:
+        x, y = distance, 0
+
+    surface = str(spec.get("surface", "")).lower()
+    if any(word in surface for word in ["桌", "台", "平台", "table", "desk", "platform"]):
+        z = TABLE_HEIGHT_MM
+    elif any(word in surface for word in ["地", "ground", "floor"]):
+        z = GRASP_HEIGHT_MM
+    elif spec.get("z_mm") is not None:
+        z = float(spec["z_mm"])
+    else:
+        z = default_z
     return Point3D(float(x), float(y), float(z))
 
 
@@ -400,6 +433,137 @@ def plan_pick_and_place(description: str, source: Point3D, destination: Point3D)
     return renumber_steps(steps)
 
 
+def append_safe_move(steps: list[dict[str, Any]], step: int, current_joints: dict[str, float], speed: str = "medium") -> tuple[int, dict[str, float]]:
+    safe_joints = safe_yaw_joints(current_joints["j1"])
+    if abs(current_joints["j2"] - safe_joints["j2"]) < 1e-6 and abs(current_joints["j3"] - safe_joints["j3"]) < 1e-6:
+        return step, current_joints
+    comment = "肩肘展开到安全转向姿态" if abs(shortest_yaw_delta(current_joints["j1"], HOME_JOINTS["j1"])) < 1e-6 else "回到当前方位安全转向姿态"
+    steps.append(make_move(step, comment, safe_joints, speed))
+    return step + 1, safe_joints
+
+
+def append_approach_target(
+    steps: list[dict[str, Any]],
+    step: int,
+    current_joints: dict[str, float],
+    target: Point3D,
+    label: str,
+) -> tuple[int, dict[str, float], dict[str, float], dict[str, float]]:
+    hover = make_hover_point(target)
+    target_yaw = inverse_kinematics(hover.x, hover.y, hover.z)["j1"]
+    target_safe_joints = safe_yaw_joints(target_yaw)
+    hover_joints = inverse_kinematics(hover.x, hover.y, hover.z)
+    target_joints = inverse_kinematics(target.x, target.y, target.z)
+
+    step, current_joints = append_safe_move(steps, step, current_joints)
+    if abs(shortest_yaw_delta(current_joints["j1"], target_yaw)) >= 0.5:
+        steps.append(make_move(step, f"保持肩肘姿态旋转基座对准{label}方位", target_safe_joints, "medium"))
+        step += 1
+        current_joints = target_safe_joints
+    steps.append(make_move(step, f"肩肘协同伸出到{label}点上方", hover_joints, "medium")); step += 1
+    steps.append(make_move(step, f"保持方位下降到{label}点", target_joints, "slow")); step += 1
+    return step, target_joints, hover_joints, target_safe_joints
+
+
+def append_return_home(steps: list[dict[str, Any]], step: int, current_joints: dict[str, float]) -> tuple[int, dict[str, float]]:
+    step, current_joints = append_safe_move(steps, step, current_joints)
+    home_safe_joints = safe_yaw_joints(HOME_JOINTS["j1"])
+    if abs(shortest_yaw_delta(current_joints["j1"], HOME_JOINTS["j1"])) >= 0.5:
+        steps.append(make_move(step, "保持肩肘姿态旋回 HOME 方位", home_safe_joints, "medium"))
+        step += 1
+        current_joints = home_safe_joints
+    steps.append(make_move(step, "肩肘垂直收拢回 HOME", HOME_JOINTS, "medium"))
+    return step + 1, dict(HOME_JOINTS)
+
+
+def normalize_command_type(raw_type: Any) -> str:
+    value = str(raw_type or "").strip().lower()
+    if value in {"pick", "grasp", "grab", "pickup", "抓取", "拿取", "拾取"}:
+        return "pick"
+    if value in {"place", "put", "drop", "release", "放置", "放下"}:
+        return "place"
+    if value in {"home", "reset", "复位", "回零"}:
+        return "home"
+    raise PlanningError(f"不支持的语义命令类型: {raw_type}")
+
+
+def command_target(command: dict[str, Any], default_z: float) -> Point3D:
+    target = command.get("target")
+    if target is None:
+        raise PlanningError(f"{command.get('type')} 命令缺少 target")
+    return target_from_spec(target, default_z=default_z)
+
+
+def plan_command_sequence(commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not commands:
+        raise PlanningError("语义命令序列不能为空")
+
+    steps: list[dict[str, Any]] = []
+    step = 1
+    current_joints = dict(HOME_JOINTS)
+    gripper_state = "open"
+
+    for command in commands:
+        command_type = normalize_command_type(command.get("type"))
+        if command_type == "home":
+            step, current_joints = append_return_home(steps, step, current_joints)
+            continue
+
+        if command_type == "pick":
+            target = command_target(command, default_z=GRASP_HEIGHT_MM)
+            if gripper_state != "open":
+                steps.append(make_gripper(step, "open", 80, 0, "打开夹爪准备抓取")); step += 1
+                gripper_state = "open"
+            elif not steps:
+                steps.append(make_gripper(step, "open", 80, 0, "预开夹爪")); step += 1
+            step, current_joints, hover_joints, target_safe_joints = append_approach_target(steps, step, current_joints, target, "抓取")
+            steps.append(make_gripper(step, "close", 20, 50, "闭合夹爪抓取")); step += 1
+            gripper_state = "close"
+            steps.append(make_wait(step, 500, "等待夹持稳定")); step += 1
+            steps.append(make_move(step, "肩肘协同抬起目标物", hover_joints, "slow")); step += 1
+            steps.append(make_move(step, "回到当前方位安全转向姿态", target_safe_joints, "medium")); step += 1
+            current_joints = target_safe_joints
+            continue
+
+        if command_type == "place":
+            target = command_target(command, default_z=GRASP_HEIGHT_MM)
+            step, current_joints, hover_joints, target_safe_joints = append_approach_target(steps, step, current_joints, target, "放置")
+            steps.append(make_gripper(step, "open", 80, 0, "打开夹爪释放")); step += 1
+            gripper_state = "open"
+            steps.append(make_wait(step, 500, "等待物体稳定")); step += 1
+            steps.append(make_move(step, "肩肘协同抬离放置点", hover_joints, "slow")); step += 1
+            steps.append(make_move(step, "回到当前方位安全转向姿态", target_safe_joints, "medium")); step += 1
+            current_joints = target_safe_joints
+
+    if not steps or steps[-1].get("action") != "move_joints" or steps[-1]["params"]["joints"] != HOME_JOINTS:
+        append_return_home(steps, step, current_joints)
+    return renumber_steps(steps)
+
+
+def build_task_from_command_plan(plan: dict[str, Any], original_description: str | None = None) -> dict[str, Any]:
+    commands = plan.get("commands")
+    if not isinstance(commands, list):
+        raise PlanningError("语义 JSON 缺少 commands 数组")
+    steps = plan_command_sequence(commands)
+    task = {
+        "task_id": str(uuid.uuid4()),
+        "task_description": original_description or str(plan.get("description") or "结构化语义命令"),
+        "created_at": datetime.now(CHINA_TZ).isoformat(timespec="seconds"),
+        "metadata": {
+            **build_metadata(original_description or "", None),
+            "semantic_plan": plan,
+            "command_target_analysis": [
+                {"type": normalize_command_type(command.get("type")), "target": describe_target(command_target(command, GRASP_HEIGHT_MM))}
+                for command in commands
+                if normalize_command_type(command.get("type")) in {"pick", "place"}
+            ],
+        },
+        "steps": steps,
+    }
+    validate_task(task)
+    return task
+
+
 def plan_home() -> list[dict[str, Any]]:
     return [make_move(1, "回到三关节 HOME 姿态", HOME_JOINTS, "medium")]
 
@@ -493,7 +657,7 @@ def validate_step(step: dict[str, Any]) -> None:
 
 def main() -> int:
     configure_stdio()
-    parser = argparse.ArgumentParser(description="生成 3-DOF 机械臂 JSON 指令序列")
+    parser = argparse.ArgumentParser(description="用本地规则生成 3-DOF 机械臂可执行任务 JSON")
     parser.add_argument("description")
     parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()

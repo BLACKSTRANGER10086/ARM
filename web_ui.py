@@ -3,7 +3,8 @@
 负责提供静态页面服务、`/api/random` 和 `/api/workflow` 接口，并将已校验
 任务 JSON 转换为前端动画关键帧。主要对外接口是 HTTP API，内部由
 `run_workflow()` 串联 `random_task_generator.py`、`llm_planner.py` 和
-`arm_planner.py`，再把结果交给 `web/app.js` 渲染。
+`arm_planner.py`。`/api/workflow` 接收 `task_text/model/retries/local_first`，
+再把任务 JSON 和动画帧交给 `web/app.js` 渲染。
 """
 
 import argparse

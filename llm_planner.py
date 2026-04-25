@@ -1,10 +1,10 @@
-﻿"""自然语言任务的语义归一化模块。
+﻿"""自然语言任务的结构化语义解析模块。
 
-负责优先调用 LLM 将用户输入整理成本地规划器可处理的中文任务；LLM 不可用
-或归一化结果不可规划时再回退本地规则。主要对外接口是
+负责优先调用 LLM 将用户输入整理成本地规划器可处理的结构化 JSON 命令；
+LLM 不可用或语义命令不可规划时再回退本地规则。主要对外接口是
 `build_task_with_llm()`。本模块不生成关节轨迹，而是调用
-`arm_planner.build_task()` 生成最终任务 JSON，并被命令行入口、
-`workflow_demo.py` 和 `web_ui.py` 使用。
+`arm_planner.build_task_from_command_plan()` 或本地回退入口 `build_task()`
+生成最终任务 JSON，并被命令行入口、`workflow_demo.py` 和 `web_ui.py` 使用。
 """
 
 import argparse
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from arm_planner import PlanningError, build_task, validate_task
+from arm_planner import PlanningError, build_task, build_task_from_command_plan, validate_task
 
 
 ROOT = Path(__file__).resolve().parent
@@ -77,12 +77,35 @@ def schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["normalized_instruction"],
+        "required": ["commands"],
         "properties": {
-            "normalized_instruction": {
+            "description": {
                 "type": "string",
-                "description": "保留用户意图，明确抓取/放置/复位/抓取后放置、源位置、目标位置、地面/桌面位置的中文指令。",
-            }
+                "description": "结构化命令对应的中文任务描述。",
+            },
+            "commands": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["type"],
+                    "properties": {
+                        "type": {"type": "string", "enum": ["pick", "place", "home"]},
+                        "target": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "direction": {"type": "string", "description": "front/back/left/right 或中文方向"},
+                                "distance_mm": {"type": "number"},
+                                "distance_cm": {"type": "number"},
+                                "surface": {"type": "string", "description": "ground/table/platform 或中文表面"},
+                                "object": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
         },
     }
 
@@ -92,12 +115,12 @@ def call_llm(description: str, model: str) -> str:
     prompt = (
         "你是3自由度机械臂的自然语言解析器。\n"
         "机械臂有 J1 底座 yaw、J2 肩部 pitch、J3 肘部 pitch：J1 决定前/后/左/右方位，J2/J3 协同决定高度与径向伸出；没有腕部自由度。\n"
-        "请把用户指令改写为一句清晰中文规范指令，必须保留任务类型、方向、距离和表面高度。\n"
-        "支持任务类型：抓取、放置、复位、先抓取再放置。\n"
-        "复合任务必须同时保留抓取源位置和放置目标位置，格式类似：先抓取右侧20厘米处地面上的杯子，然后放到前面5厘米处桌面上。\n"
-        "示例：'拿一下前面50厘米的盒子' -> '抓取前面50厘米处地面上的盒子'。\n"
-        "示例：'把它放左边三十公分' -> '放到左侧30厘米处台面上'。\n"
-        "示例：'把右侧20厘米地上的杯子抓起来放到前面5cm' -> '先抓取右侧20厘米处地面上的杯子，然后放到前面5厘米处'。\n"
+        "请把用户指令转换为结构化 JSON 语义命令，不要输出关节角、轨迹点或 move_joints。\n"
+        "commands 是顺序执行的高层命令数组，type 只能是 pick、place、home。\n"
+        "pick/place 必须包含 target；target.direction 用 front/back/left/right，distance_mm 用毫米，surface 用 ground/table/platform，object 保留目标物名称。\n"
+        "如果用户没有明确表面，抓取默认 ground，放置默认 ground；如果没有明确距离，可以根据语义合理补全常见距离。\n"
+        "示例：'拿一下前面50厘米的盒子' -> commands=[{type:'pick', target:{direction:'front', distance_mm:500, surface:'ground', object:'盒子'}}]。\n"
+        "示例：'把右侧20厘米地上的杯子抓起来放到前面5cm' -> commands=[{type:'pick', target:{direction:'right', distance_mm:200, surface:'ground', object:'杯子'}}, {type:'place', target:{direction:'front', distance_mm:50, surface:'ground'}}]。\n"
         f"用户指令：{description}"
     )
     try:
@@ -127,15 +150,17 @@ def build_task_with_llm(description: str, model: str | None = None, debug: bool 
             return build_validated_task(description, description)
         except PlanningError as exc:
             if debug:
-                print(f"本地直接规划失败，尝试 LLM 归一化: {exc}", file=sys.stderr)
+                print(f"本地直接规划失败，尝试 LLM 结构化语义解析: {exc}", file=sys.stderr)
 
     selected_model = model or os.getenv("OPENAI_MODEL") or DEFAULT_MODEL
     try:
         parsed = extract_json(call_llm(description, selected_model))
-        normalized = parsed.get("normalized_instruction") or description
+        if "commands" in parsed:
+            return build_task_from_command_plan(parsed, description)
+        normalized = parsed.get("normalized_instruction") or parsed.get("description") or description
     except Exception as exc:
         if debug:
-            print(f"LLM 解析失败，回退本地规则: {exc}", file=sys.stderr)
+            print(f"LLM 结构化语义解析失败，回退本地规则: {exc}", file=sys.stderr)
         normalized = description
     try:
         return build_validated_task(normalized, description)
@@ -153,12 +178,12 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="调用 LLM 生成 3-DOF 机械臂 JSON 指令序列")
+    parser = argparse.ArgumentParser(description="调用 LLM 生成语义 commands，并由本地规划器生成 3-DOF 任务 JSON")
     parser.add_argument("description")
     parser.add_argument("--model", default=None)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--compact", action="store_true")
-    parser.add_argument("--local-first", action="store_true", help="跳过 LLM，优先尝试本地规则解析规范输入")
+    parser.add_argument("--local-first", action="store_true", help="跳过 LLM，优先尝试本地中文规则解析")
     args = parser.parse_args()
     try:
         task = build_task_with_llm(args.description, args.model, args.debug, args.local_first)

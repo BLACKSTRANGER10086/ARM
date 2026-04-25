@@ -1,8 +1,9 @@
 ﻿"""终端版任务轨迹演示模块。
 
-负责读取任务 JSON，校验后将关节运动、TCP、夹爪状态和耗时打印为可读文本。
-主要对外接口是 `simulate_task()`。本模块依赖 `arm_planner.validate_task()`
-和正运动学计算，可接收命令行管道输入，也被 `workflow_demo.py` 调用。
+负责读取本地可执行任务 JSON，校验后将语义命令目标、关节运动、TCP、夹爪
+状态和耗时打印为可读文本。主要对外接口是 `simulate_task()`。本模块依赖
+`arm_planner.validate_task()` 和正运动学计算，可接收命令行管道输入，也被
+`workflow_demo.py` 调用。
 """
 
 import argparse
@@ -46,9 +47,16 @@ def simulate_task(task: dict[str, Any]) -> str:
         f"Steps: {len(task['steps'])}",
         "",
     ]
+    command_analysis = task.get("metadata", {}).get("command_target_analysis")
     compound_analysis = task.get("metadata", {}).get("compound_target_analysis")
     target_analysis = task.get("metadata", {}).get("target_analysis")
-    if compound_analysis:
+    if command_analysis:
+        lines.append("Command Target Analysis:")
+        for index, item in enumerate(command_analysis, start=1):
+            requested = item["target"]["requested_tcp"]
+            lines.append(f"  {index}. {item['type']} tcp=({requested['x']:.0f},{requested['y']:.0f},{requested['z']:.0f})mm")
+        lines.append("")
+    elif compound_analysis:
         source = compound_analysis["source"]["requested_tcp"]
         destination = compound_analysis["destination"]["requested_tcp"]
         lines.extend(
@@ -108,7 +116,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="演示 3-DOF 机械臂 JSON 指令序列")
+    parser = argparse.ArgumentParser(description="演示 3-DOF 机械臂可执行任务 JSON")
     parser.add_argument("json_path", nargs="?", default="-", help="任务 JSON 路径；默认从 stdin 读取")
     args = parser.parse_args()
     try:

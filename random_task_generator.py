@@ -2,7 +2,7 @@
 
 负责生成抓取、放置、抓取后放置、复位类自然语言任务，用于测试和 Web 随机任务入口。
 主要对外接口是 `generate_task()`。本模块被 `workflow_demo.py` 和
-`web_ui.py` 调用，为后续 LLM 归一化和本地规划提供输入。
+`web_ui.py` 调用，为后续 LLM 结构化语义解析和本地规划提供输入。
 """
 
 import argparse
