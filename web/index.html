@@ -1,0 +1,115 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3-DOF 机械臂控制台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Doto:wght@300..900&family=Space+Grotesk:wght@300..700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css?v=20260425">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="heroText">
+        <div class="metaLine">[ 机械臂智能体 ] [ 本地工作流 ]</div>
+        <h1>机械臂<br>自然语言控制台</h1>
+      </div>
+      <div class="heroStatus">
+        <div class="statusCode">就绪</div>
+        <div class="statusHint">随机指令 / 大模型规划 / 3D 演示</div>
+      </div>
+    </header>
+
+    <section class="mainGrid">
+      <aside class="controlPane">
+        <div class="sectionLabel">01 / 指令输入</div>
+        <label class="field">
+          <span>自然语言任务</span>
+          <textarea id="taskText" rows="6" placeholder="抓取前面50厘米处地面上的盒子"></textarea>
+        </label>
+
+        <div class="formGrid">
+          <label class="field">
+            <span>随机类型</span>
+            <select id="taskType">
+              <option value="mixed">混合</option>
+              <option value="grasp">抓取</option>
+              <option value="place">放置</option>
+              <option value="pick_place">抓取后放置</option>
+              <option value="home">复位</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>重试</span>
+            <input id="retries" type="number" min="1" max="10" value="3">
+          </label>
+        </div>
+
+        <label class="checkField">
+          <input id="localFirst" type="checkbox">
+          <span>本地优先（跳过 LLM）</span>
+        </label>
+
+        <label class="field">
+          <span>模型名（可选）</span>
+          <input id="model" type="text" placeholder="留空读取 .env">
+        </label>
+
+        <div class="buttonRow">
+          <button id="randomTaskBtn" class="btn secondary">[ 随机生成 ]</button>
+          <button id="runBtn" class="btn primary">[ 运行流程 ]</button>
+        </div>
+
+        <div id="status" class="inlineStatus">[ 空闲 ] 等待任务输入</div>
+
+        <div class="transport">
+          <button id="playBtn" class="chip">播放</button>
+          <button id="pauseBtn" class="chip">暂停</button>
+          <button id="resetBtn" class="chip">重置</button>
+        </div>
+
+        <input id="frameSlider" class="range" type="range" min="0" max="0" value="0">
+
+        <div class="telemetry">
+          <div><span>步骤</span><strong id="stepInfo">-</strong></div>
+          <div><span>关节</span><strong id="positionInfo">-</strong></div>
+          <div><span>夹爪</span><strong id="gripperInfo">-</strong></div>
+        </div>
+      </aside>
+
+      <section class="stagePane">
+        <div class="stageHeader">
+          <div>
+            <div class="sectionLabel">02 / 3D 演示</div>
+            <h2>3D 机械臂视图</h2>
+          </div>
+          <div class="stageLegend">J1底座 / J2肩关节 / J3肘关节 / 末端 / 轨迹</div>
+        </div>
+        <div id="armViewport" class="armViewport"></div>
+      </section>
+    </section>
+
+    <section class="dataGrid">
+      <section class="dataPane">
+        <div class="sectionLabel">03 / 时间线</div>
+        <div id="steps" class="steps"></div>
+      </section>
+      <section class="dataPane">
+        <div class="sectionLabel">04 / JSON 指令</div>
+        <pre id="jsonBox">[ 空 ] 尚未生成规划结果</pre>
+      </section>
+    </section>
+  </main>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="/app.js?v=20260425"></script>
+</body>
+</html>

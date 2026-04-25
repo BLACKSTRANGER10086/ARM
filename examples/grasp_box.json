@@ -1,0 +1,226 @@
+﻿{
+  "task_id": "3257e978-87ca-4eec-9ee9-47edb737024a",
+  "task_description": "抓取左侧30厘米处地面上的盒子",
+  "created_at": "2026-04-25T01:14:03+08:00",
+  "metadata": {
+    "model": "3-DOF yaw+shoulder+elbow",
+    "base_height_mm": 260,
+    "upper_arm_mm": 280,
+    "forearm_mm": 240,
+    "arm_reach_mm": 520,
+    "home_joints": {
+      "j1": 0.0,
+      "j2": 90.0,
+      "j3": 0.0
+    },
+    "joint_limits_deg": {
+      "j1": [
+        -180.0,
+        180.0
+      ],
+      "j2": [
+        -45.0,
+        120.0
+      ],
+      "j3": [
+        -150.0,
+        150.0
+      ]
+    },
+    "target_analysis": {
+      "requested_tcp": {
+        "x": 0.0,
+        "y": 300.0,
+        "z": 120.0
+      },
+      "planned_joints": {
+        "j1": 90.0,
+        "j2": 20.285,
+        "j3": -101.328
+      },
+      "actual_tcp": {
+        "x": 0.0,
+        "y": 300.001,
+        "z": 120.0
+      },
+      "requested_radial_mm": 300.0,
+      "actual_radial_mm": 300.001,
+      "radial_error_mm": 0.001,
+      "note": "3-DOF yaw+shoulder+elbow 机构可用 J2/J3 同时调节高度与径向距离。"
+    }
+  },
+  "steps": [
+    {
+      "step": 1,
+      "action": "gripper",
+      "comment": "预开夹爪",
+      "params": {
+        "state": "open",
+        "width": 80,
+        "force": 0
+      }
+    },
+    {
+      "step": 2,
+      "action": "move_joints",
+      "comment": "肩肘展开到安全转向姿态",
+      "params": {
+        "joints": {
+          "j1": 0.0,
+          "j2": 55.0,
+          "j3": -90.0
+        },
+        "tcp": {
+          "x": 357.198,
+          "y": 0.0,
+          "z": 351.704
+        },
+        "speed": "medium"
+      }
+    },
+    {
+      "step": 3,
+      "action": "move_joints",
+      "comment": "保持肩肘姿态旋转基座对准目标方位",
+      "params": {
+        "joints": {
+          "j1": 90.0,
+          "j2": 55.0,
+          "j3": -90.0
+        },
+        "tcp": {
+          "x": 0.0,
+          "y": 357.198,
+          "z": 351.704
+        },
+        "speed": "medium"
+      }
+    },
+    {
+      "step": 4,
+      "action": "move_joints",
+      "comment": "肩肘协同伸出到目标上方",
+      "params": {
+        "joints": {
+          "j1": 90.0,
+          "j2": 40.863,
+          "j3": -109.29
+        },
+        "tcp": {
+          "x": 0.0,
+          "y": 300.002,
+          "z": 220.003
+        },
+        "speed": "medium"
+      }
+    },
+    {
+      "step": 5,
+      "action": "move_joints",
+      "comment": "保持方位下降到抓取点",
+      "params": {
+        "joints": {
+          "j1": 90.0,
+          "j2": 20.285,
+          "j3": -101.328
+        },
+        "tcp": {
+          "x": 0.0,
+          "y": 300.001,
+          "z": 120.0
+        },
+        "speed": "slow"
+      }
+    },
+    {
+      "step": 6,
+      "action": "gripper",
+      "comment": "闭合夹爪抓取",
+      "params": {
+        "state": "close",
+        "width": 20,
+        "force": 50
+      }
+    },
+    {
+      "step": 7,
+      "action": "wait",
+      "comment": "等待夹持稳定",
+      "params": {
+        "duration_ms": 500
+      }
+    },
+    {
+      "step": 8,
+      "action": "move_joints",
+      "comment": "肩肘协同抬起目标物",
+      "params": {
+        "joints": {
+          "j1": 90.0,
+          "j2": 40.863,
+          "j3": -109.29
+        },
+        "tcp": {
+          "x": 0.0,
+          "y": 300.002,
+          "z": 220.003
+        },
+        "speed": "slow"
+      }
+    },
+    {
+      "step": 9,
+      "action": "move_joints",
+      "comment": "回到当前方位安全转向姿态",
+      "params": {
+        "joints": {
+          "j1": 90.0,
+          "j2": 55.0,
+          "j3": -90.0
+        },
+        "tcp": {
+          "x": 0.0,
+          "y": 357.198,
+          "z": 351.704
+        },
+        "speed": "medium"
+      }
+    },
+    {
+      "step": 10,
+      "action": "move_joints",
+      "comment": "保持肩肘姿态旋回 HOME 方位",
+      "params": {
+        "joints": {
+          "j1": 0.0,
+          "j2": 55.0,
+          "j3": -90.0
+        },
+        "tcp": {
+          "x": 357.198,
+          "y": 0.0,
+          "z": 351.704
+        },
+        "speed": "medium"
+      }
+    },
+    {
+      "step": 11,
+      "action": "move_joints",
+      "comment": "肩肘垂直收拢回 HOME",
+      "params": {
+        "joints": {
+          "j1": 0.0,
+          "j2": 90.0,
+          "j3": 0.0
+        },
+        "tcp": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 780.0
+        },
+        "speed": "medium"
+      }
+    }
+  ]
+}

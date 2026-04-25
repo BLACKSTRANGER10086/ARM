@@ -1,0 +1,81 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "3-DOF Robot Arm Task",
+  "type": "object",
+  "required": ["task_id", "task_description", "created_at", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": { "type": "string" },
+    "task_description": { "type": "string" },
+    "created_at": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": true },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step", "action", "params"],
+        "additionalProperties": false,
+        "properties": {
+          "step": { "type": "integer", "minimum": 1 },
+          "action": { "type": "string", "enum": ["move_joints", "gripper", "wait"] },
+          "comment": { "type": "string" },
+          "params": {
+            "oneOf": [
+              { "$ref": "#/$defs/moveJoints" },
+              { "$ref": "#/$defs/gripper" },
+              { "$ref": "#/$defs/wait" }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "moveJoints": {
+      "type": "object",
+      "required": ["joints", "tcp", "speed"],
+      "additionalProperties": false,
+      "properties": {
+        "joints": {
+          "type": "object",
+          "required": ["j1", "j2", "j3"],
+          "additionalProperties": false,
+          "properties": {
+            "j1": { "type": "number", "minimum": -180, "maximum": 180 },
+            "j2": { "type": "number", "minimum": -45, "maximum": 120 },
+            "j3": { "type": "number", "minimum": -150, "maximum": 150 }
+          }
+        },
+        "tcp": {
+          "type": "object",
+          "required": ["x", "y", "z"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "z": { "type": "number", "minimum": 0 }
+          }
+        },
+        "speed": { "type": "string", "enum": ["slow", "medium", "fast"] }
+      }
+    },
+    "gripper": {
+      "type": "object",
+      "required": ["state", "width", "force"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "enum": ["open", "close"] },
+        "width": { "type": "number", "minimum": 0, "maximum": 100 },
+        "force": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "wait": {
+      "type": "object",
+      "required": ["duration_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
