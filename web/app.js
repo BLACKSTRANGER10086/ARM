@@ -93,6 +93,15 @@ function payload() {
   return { task_text: els.taskText.value.trim(), type: els.taskType.value, retries: Number(els.retries.value || 3), model: els.model.value.trim() || null, local_first: els.localFirst.checked };
 }
 
+function plannerStatus(metadata = {}) {
+  const source = metadata.planner_source;
+  if (source === "llm") return { text: "[ 完成 ] LLM 语义解析 + 本地轨迹规划", kind: "ok" };
+  if (source === "fallback_local") return { text: `[ 回退 ] LLM 调用失败，已使用本地规则：${metadata.llm_error || "未知错误"}`, kind: "err" };
+  if (source === "local_first") return { text: "[ 完成 ] 本地优先规划，未调用 LLM", kind: "ok" };
+  if (source === "llm_normalized_local") return { text: "[ 完成 ] LLM 归一化后由本地规则规划", kind: "ok" };
+  return { text: "[ 完成 ] 3-DOF 轨迹已生成", kind: "ok" };
+}
+
 function frameFromApi(apiFrame) {
   const joints = apiFrame.joints || HOME.joints;
   const normalized = {
@@ -284,7 +293,8 @@ async function runWorkflow() {
     motionFrames = buildMotionFrames(run.frames);
     frameIndex = 0;
     renderFrame();
-    setStatus("[ 完成 ] 3-DOF 轨迹已生成", "ok");
+    const status = plannerStatus(run.task.metadata || {});
+    setStatus(status.text, status.kind);
     play();
   } catch (error) {
     resetResult(`[ 错误 ] ${error.message || error}`);

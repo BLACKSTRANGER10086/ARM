@@ -46,7 +46,18 @@ def env_flag(name: str, default: bool = False) -> bool:
 def build_validated_task(planning_description: str, original_description: str, start_joints: dict[str, float] | None = None, return_home: bool = True) -> dict[str, Any]:
     task = build_task(planning_description, start_joints=start_joints, return_home=return_home)
     task["task_description"] = original_description
-    validate_task(task)
+    validate_task(task, start_joints=start_joints)
+    return task
+
+
+def mark_planner_source(task: dict[str, Any], source: str, *, model: str | None = None, llm_error: str | None = None, llm_attempted: bool = False) -> dict[str, Any]:
+    metadata = task.setdefault("metadata", {})
+    metadata["planner_source"] = source
+    metadata["llm_attempted"] = llm_attempted
+    if model:
+        metadata["llm_model"] = model
+    if llm_error:
+        metadata["llm_error"] = llm_error
     return task
 
 
@@ -110,9 +121,8 @@ def schema() -> dict[str, Any]:
     }
 
 
-def call_llm(description: str, model: str) -> str:
-    client = create_client()
-    prompt = (
+def build_parse_prompt(description: str) -> str:
+    return (
         "你是3自由度机械臂的自然语言解析器。\n"
         "机械臂有 J1 底座 yaw、J2 肩部 pitch、J3 肘部 pitch：J1 决定前/后/左/右方位，J2/J3 协同决定高度与径向伸出；没有腕部自由度。\n"
         "请把用户指令转换为结构化 JSON 语义命令，不要输出关节角、轨迹点或 move_joints。\n"
@@ -123,23 +133,80 @@ def call_llm(description: str, model: str) -> str:
         "示例：'把右侧20厘米地上的杯子抓起来放到前面5cm' -> commands=[{type:'pick', target:{direction:'right', distance_mm:200, surface:'ground', object:'杯子'}}, {type:'place', target:{direction:'front', distance_mm:50, surface:'ground'}}]。\n"
         f"用户指令：{description}"
     )
-    try:
-        response = client.responses.create(
-            model=model,
-            input=prompt,
-            text={"format": {"type": "json_schema", "name": "three_dof_parse", "schema": schema(), "strict": False}},
-        )
-    except Exception as exc:
-        raise LLMPlanningError(f"调用大模型失败: {exc}") from exc
+
+
+def call_responses_api(client: Any, model: str, prompt: str) -> str:
+    response = client.responses.create(
+        model=model,
+        input=prompt,
+        text={"format": {"type": "json_schema", "name": "three_dof_parse", "schema": schema(), "strict": False}},
+    )
     return response.output_text
 
 
+def extract_chat_content(response: Any) -> str:
+    content = response.choices[0].message.content
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, ensure_ascii=False)
+
+
+def call_chat_completions_api(client: Any, model: str, prompt: str, *, use_schema: bool) -> str:
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": 800,
+    }
+    if use_schema:
+        kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "three_dof_parse", "schema": schema(), "strict": False},
+        }
+    response = client.chat.completions.create(**kwargs)
+    return extract_chat_content(response)
+
+
+def call_llm(description: str, model: str) -> str:
+    client = create_client()
+    prompt = build_parse_prompt(description)
+    errors: list[str] = []
+    try:
+        return call_responses_api(client, model, prompt)
+    except Exception as exc:
+        errors.append(f"responses: {exc}")
+
+    try:
+        return call_chat_completions_api(client, model, prompt, use_schema=True)
+    except Exception as exc:
+        errors.append(f"chat.completions(json_schema): {exc}")
+
+    try:
+        plain_prompt = f"{prompt}\n只返回一个合法 JSON 对象，不要使用 Markdown 代码块。"
+        return call_chat_completions_api(client, model, plain_prompt, use_schema=False)
+    except Exception as exc:
+        errors.append(f"chat.completions: {exc}")
+
+    raise LLMPlanningError("调用大模型失败: " + " | ".join(errors))
+
+
 def extract_json(text: str) -> dict[str, Any]:
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        raise LLMPlanningError("模型未返回 JSON")
-    return json.loads(text[start : end + 1])
+    cleaned = text.strip().lstrip("\ufeff")
+    decoder = json.JSONDecoder()
+    first_object: dict[str, Any] | None = None
+    for match in re.finditer(r"\{", cleaned):
+        try:
+            parsed, _ = decoder.raw_decode(cleaned[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            if first_object is None:
+                first_object = parsed
+            if isinstance(parsed.get("commands"), list):
+                return parsed
+    if first_object is not None:
+        return first_object
+    raise LLMPlanningError("模型未返回可解析的 JSON 对象")
 
 
 def build_task_with_llm(description: str, model: str | None = None, debug: bool = False, local_first: bool | None = None, start_joints: dict[str, float] | None = None, start_gripper: str = "open", return_home: bool = True) -> dict[str, Any]:
@@ -147,27 +214,34 @@ def build_task_with_llm(description: str, model: str | None = None, debug: bool 
     use_local_first = env_flag(LOCAL_FIRST_ENV) if local_first is None else local_first
     if use_local_first and can_try_local_first(description):
         try:
-            return build_validated_task(description, description, start_joints=start_joints, return_home=return_home)
+            task = build_validated_task(description, description, start_joints=start_joints, return_home=return_home)
+            return mark_planner_source(task, "local_first", llm_attempted=False)
         except PlanningError as exc:
             if debug:
                 print(f"本地直接规划失败，尝试 LLM 结构化语义解析: {exc}", file=sys.stderr)
 
     selected_model = model or os.getenv("OPENAI_MODEL") or DEFAULT_MODEL
+    llm_error: str | None = None
     try:
         parsed = extract_json(call_llm(description, selected_model))
         if "commands" in parsed:
-            return build_task_from_command_plan(parsed, description, start_joints=start_joints, start_gripper=start_gripper, return_home=return_home)
+            task = build_task_from_command_plan(parsed, description, start_joints=start_joints, start_gripper=start_gripper, return_home=return_home)
+            return mark_planner_source(task, "llm", model=selected_model, llm_attempted=True)
         normalized = parsed.get("normalized_instruction") or parsed.get("description") or description
     except Exception as exc:
+        llm_error = str(exc)
         if debug:
             print(f"LLM 结构化语义解析失败，回退本地规则: {exc}", file=sys.stderr)
         normalized = description
     try:
-        return build_validated_task(normalized, description, start_joints=start_joints, return_home=return_home)
+        task = build_validated_task(normalized, description, start_joints=start_joints, return_home=return_home)
+        source = "fallback_local" if llm_error else "llm_normalized_local"
+        return mark_planner_source(task, source, model=selected_model, llm_error=llm_error, llm_attempted=True)
     except PlanningError as normalized_exc:
         if normalized != description:
             try:
-                return build_validated_task(description, description, start_joints=start_joints, return_home=return_home)
+                task = build_validated_task(description, description, start_joints=start_joints, return_home=return_home)
+                return mark_planner_source(task, "fallback_local", model=selected_model, llm_error=llm_error, llm_attempted=True)
             except PlanningError as original_exc:
                 raise LLMPlanningError(f"3-DOF 规划失败: {normalized_exc}; 原始输入回退也失败: {original_exc}") from original_exc
         raise LLMPlanningError(f"3-DOF 规划失败: {normalized_exc}") from normalized_exc

@@ -61,10 +61,12 @@ OPENAI_BASE_URL=https://你的api地址/v1
 
 - `OPENAI_API_KEY`：必填，支持任何 OpenAI 兼容接口。
 - `OPENAI_MODEL`：可选，默认 `deepseek-v4-flash`。
-- `OPENAI_BASE_URL`：使用第三方 API 时必填。
+- `OPENAI_BASE_URL`：使用第三方 API 时必填，填写 OpenAI 兼容接口根路径，例如 `https://你的api地址/v1`，不要填到 `/chat/completions` 这一级。
 - `ARM_LOCAL_FIRST`：可选，设为 `1` 可全局优先使用本地规则解析，等同于 `--local-first`。
 
 > 不填 API Key 也能运行——LLM 调用会失败并尝试回退到本地规则解析，功能受限但足以测试运动规划。
+
+> 兼容性提示：部分国产模型或第三方 API（如 DeepSeek、GLM、聚合中转服务）可能不支持 OpenAI 的 Responses API `/responses`，只支持 Chat Completions `/chat/completions`。项目会先尝试 `/responses`，失败后自动降级到 `/chat/completions`；如果 Web 状态栏显示“LLM 调用失败，已使用本地规则”，请优先检查 `OPENAI_BASE_URL` 是否是正确的 `/v1` 根路径，以及该服务是否已发布兼容接口。
 
 ### 3. 启动
 
@@ -356,12 +358,16 @@ HOME 位：{ j1: 0°, j2: 90°, j3: 0° }（竖直收拢，TCP 位于正上方 7
    └─ 失败 → 继续
 
 2. 调用 LLM 生成语义 JSON
+   ├─ 先尝试 Responses API (/responses)
+   ├─ 不支持 /responses 时自动降级 Chat Completions (/chat/completions)
    ├─ 返回含 commands → arm_planner.build_task_from_command_plan() → 返回
-   └─ 失败 → 继续
+   └─ LLM 调用失败或 JSON 不可规划 → 继续
 
 3. 回退：用 LLM 返回的 normalized_instruction 或原始输入
    → arm_planner.build_task() 本地规则解析 → 返回或抛出错误
 ```
+
+国产模型或第三方 OpenAI 兼容服务的接口能力不完全一致。常见情况是 `/v1/chat/completions` 可用，但 `/v1/responses` 返回 404（例如“API does not exist or has not been published”）。这不是模型不可用，而是接口路径不支持；当前实现会自动切到 Chat Completions。Web 端会在状态栏和任务 `metadata.planner_source` 中标记实际来源：`llm` 表示 LLM 语义解析成功，`fallback_local` 表示 LLM 调用失败后回退本地规则，`local_first` 表示本地优先生效。
 
 ### 状态管理
 
